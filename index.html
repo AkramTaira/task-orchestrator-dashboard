@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Task Orchestrator Dashboard</title>
+  <link rel="stylesheet" href="./styles/main.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Task Orchestrator Dashboard</h1>
+    <p>Simple dashboard shell</p>
+  </header>
+
+  <main class="grid">
+    <section class="card">
+      <h2>Overview</h2>
+      <p>Total Tasks: <span id="totalCount">0</span></p>
+      <p>Queued: <span id="queuedCount">0</span></p>
+      <p>Running: <span id="runningCount">0</span></p>
+      <p>Completed: <span id="completedCount">0</span></p>
+    </section>
+
+    <section class="card">
+      <h2>Workers</h2>
+      <div id="workersList">No workers yet.</div>
+    </section>
+
+    <section class="card full">
+      <h2>Queue</h2>
+      <ul id="queuedList"></ul>
+    </section>
+
+    <section class="card full">
+      <h2>Running</h2>
+      <ul id="runningList"></ul>
+    </section>
+  </main>
+</body>
+</html>
