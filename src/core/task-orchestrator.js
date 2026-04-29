@@ -1,11 +1,20 @@
 import { TransientError } from "./errors.js";
 
 export class TaskOrchestrator {
-  constructor({ eventBus, queue, maxConcurrency = 2, maxRetries = 2 }) {
+  constructor({
+    eventBus,
+    queue,
+    maxConcurrency = 2,
+    maxRetries = 3,
+    baseDelayMs = 500,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  }) {
     this.eventBus = eventBus;
     this.queue = queue;
     this.maxConcurrency = maxConcurrency;
     this.maxRetries = maxRetries;
+    this.baseDelayMs = baseDelayMs;
+    this.sleep = sleep;
     this.tasks = [];
     this.runningCount = 0;
     this.isStarted = false;
@@ -18,6 +27,7 @@ export class TaskOrchestrator {
       priority: taskInput.priority ?? 1,
       status: "queued",
       retries: 0,
+      nextRunAt: null,
       failReason: null,
       run: taskInput.run,
     };
@@ -34,13 +44,8 @@ export class TaskOrchestrator {
     this.#drainQueue();
   }
 
-  getState() {
-    return {
-      tasks: this.tasks,
-      runningCount: this.runningCount,
-      queueSize: this.queue.size(),
-      maxConcurrency: this.maxConcurrency,
-    };
+  #computeBackoffDelay(retriesSoFar) {
+    return this.baseDelayMs * Math.pow(2, retriesSoFar);
   }
 
   #isTransientError(error) {
@@ -63,6 +68,7 @@ export class TaskOrchestrator {
   async #runTask(task) {
     this.runningCount += 1;
     task.status = "running";
+    task.nextRunAt = null;
     this.#emitState();
 
     try {
@@ -70,18 +76,35 @@ export class TaskOrchestrator {
       task.status = "completed";
     } catch (error) {
       if (this.#isTransientError(error) && task.retries < this.maxRetries) {
+        const delay = this.#computeBackoffDelay(task.retries);
         task.retries += 1;
         task.status = "queued";
+        task.nextRunAt = Date.now() + delay;
+        this.runningCount = Math.max(0, this.runningCount - 1);
+        this.#emitState();
+
+        await this.sleep(delay);
         this.queue.enqueue(task);
-      } else {
-        task.status = "failed";
-        task.failReason = error?.message ?? "unknown";
+        this.#drainQueue();
+        return;
       }
+
+      task.status = "failed";
+      task.failReason = error?.message ?? "unknown";
     }
 
     this.runningCount = Math.max(0, this.runningCount - 1);
     this.#emitState();
     this.#drainQueue();
+  }
+
+  getState() {
+    return {
+      tasks: this.tasks,
+      runningCount: this.runningCount,
+      queueSize: this.queue.size(),
+      maxConcurrency: this.maxConcurrency,
+    };
   }
 
   #emitState() {
