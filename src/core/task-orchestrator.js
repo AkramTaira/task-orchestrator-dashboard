@@ -1,8 +1,11 @@
+import { TransientError } from "./errors.js";
+
 export class TaskOrchestrator {
-  constructor({ eventBus, queue, maxConcurrency = 2 }) {
+  constructor({ eventBus, queue, maxConcurrency = 2, maxRetries = 2 }) {
     this.eventBus = eventBus;
     this.queue = queue;
     this.maxConcurrency = maxConcurrency;
+    this.maxRetries = maxRetries;
     this.tasks = [];
     this.runningCount = 0;
     this.isStarted = false;
@@ -14,8 +17,8 @@ export class TaskOrchestrator {
       name: taskInput.name,
       priority: taskInput.priority ?? 1,
       status: "queued",
-      progress: 0,
       retries: 0,
+      failReason: null,
       run: taskInput.run,
     };
 
@@ -40,6 +43,14 @@ export class TaskOrchestrator {
     };
   }
 
+  #isTransientError(error) {
+    if (!error) return false;
+    if (error instanceof TransientError) return true;
+    if (error.transient === true) return true;
+    if (["ETIMEDOUT", "ECONNRESET"].includes(error.code)) return true;
+    return false;
+  }
+
   #drainQueue() {
     while (this.runningCount < this.maxConcurrency && !this.queue.isEmpty()) {
       const task = this.queue.dequeue();
@@ -57,9 +68,15 @@ export class TaskOrchestrator {
     try {
       await task.run();
       task.status = "completed";
-      task.progress = 100;
-    } catch {
-      task.status = "failed";
+    } catch (error) {
+      if (this.#isTransientError(error) && task.retries < this.maxRetries) {
+        task.retries += 1;
+        task.status = "queued";
+        this.queue.enqueue(task);
+      } else {
+        task.status = "failed";
+        task.failReason = error?.message ?? "unknown";
+      }
     }
 
     this.runningCount = Math.max(0, this.runningCount - 1);
