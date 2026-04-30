@@ -50,3 +50,20 @@ li {
   margin-bottom: 8px;
   background: #fff;
 }
+
+.cancel-btn {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #b91c1c;
+  background: #fee2e2;
+  color: #b91c1c;
+  border-radius: 6px;
+  padding: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.cancel-btn:hover {
+  background: #fecaca;
+}

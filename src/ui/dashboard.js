@@ -2,11 +2,25 @@ export class Dashboard {
   constructor({ orchestrator, eventBus }) {
     this.orchestrator = orchestrator;
     this.eventBus = eventBus;
+    this.bound = false;
   }
 
   mount() {
+    this.#bindCancel();
     this.eventBus.on("state:changed", (state) => this.render(state));
     this.render(this.orchestrator.getState());
+  }
+
+  #bindCancel() {
+    if (this.bound) return;
+    this.bound = true;
+
+    document.addEventListener("pointerdown", (event) => {
+      const btn = event.target.closest(".cancel-btn");
+      if (!btn) return;
+      event.preventDefault();
+      this.orchestrator.cancelTask(btn.dataset.taskId);
+    });
   }
 
   render(state) {
@@ -14,32 +28,24 @@ export class Dashboard {
     const queued = tasks.filter((t) => t.status === "queued");
     const running = tasks.filter((t) => t.status === "running");
 
-    this.setText("queuedCount", queued.length);
-    this.setText("runningCount", running.length);
-    this.setText("completedCount", tasks.filter((t) => t.status === "completed").length);
-    this.setText("totalCount", tasks.length);
-
-    this.renderWorkers(state, running);
+    this.renderList("queuedList", queued);
+    this.renderList("runningList", running);
   }
 
-  renderWorkers(state, runningTasks) {
-    const container = document.getElementById("workersList");
-    if (!container) return;
-
-    let html = `<p>Max Workers: <strong>${state.maxConcurrency || 1}</strong></p>`;
-
-    for (let i = 0; i < (state.maxConcurrency || 1); i += 1) {
-      const task = runningTasks[i];
-      html += task
-        ? `<div class="worker"><strong>Worker #${i + 1}</strong>: ${task.name}</div>`
-        : `<div class="worker"><strong>Worker #${i + 1}</strong>: idle</div>`;
-    }
-
-    container.innerHTML = html;
-  }
-
-  setText(id, value) {
+  renderList(id, items) {
     const el = document.getElementById(id);
-    if (el) el.textContent = String(value);
+    if (!el) return;
+
+    el.innerHTML = items
+      .map(
+        (t) => `
+          <li>
+            <strong>${t.name}</strong>
+            <div>Priority: ${t.priority} | Retries: ${t.retries}</div>
+            <button type="button" class="cancel-btn" data-task-id="${t.id}">Cancel</button>
+          </li>
+        `
+      )
+      .join("");
   }
 }
