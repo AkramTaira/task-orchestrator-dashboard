@@ -1,25 +1,17 @@
-import { TransientError } from "./errors.js";
+import { PermanentError, TransientError } from "./errors.js";
 
 export class TaskOrchestrator {
-  constructor({
-    eventBus,
-    queue,
-    maxConcurrency = 2,
-    maxRetries = 3,
-    baseDelayMs = 500,
-    defaultTimeoutMs = 5000,
-    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  }) {
+  constructor({ eventBus, queue, maxConcurrency = 2, taskTimeoutMs = 5000, retryDelayMs = 500, maxRetries = 3 }) {
     this.eventBus = eventBus;
     this.queue = queue;
     this.maxConcurrency = maxConcurrency;
+    this.taskTimeoutMs = taskTimeoutMs;
+    this.retryDelayMs = retryDelayMs;
     this.maxRetries = maxRetries;
-    this.baseDelayMs = baseDelayMs;
-    this.defaultTimeoutMs = defaultTimeoutMs;
-    this.sleep = sleep;
     this.tasks = [];
     this.runningCount = 0;
     this.isStarted = false;
+    this.isPaused = false;
   }
 
   enqueue(taskInput) {
@@ -28,43 +20,73 @@ export class TaskOrchestrator {
       name: taskInput.name,
       priority: taskInput.priority ?? 1,
       status: "queued",
-      retries: 0,
-      timeoutMs: taskInput.timeoutMs ?? this.defaultTimeoutMs,
-      nextRunAt: null,
-      failReason: null,
-      cancelRequested: false,
+      retries: taskInput.retries ?? 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      startedAt: null,
+      finishedAt: null,
+      nextRunAt: 0,
+      retryTimer: null,
       abortController: null,
+      cancelRequested: false,
+      failReason: "",
+      progress: 0,
+      timeoutMs: taskInput.timeoutMs ?? this.taskTimeoutMs,
+      retryDelayMs: taskInput.retryDelayMs ?? this.retryDelayMs,
+      maxRetries: taskInput.maxRetries ?? this.maxRetries,
       run: taskInput.run,
     };
 
     this.tasks.push(task);
     this.queue.enqueue(task);
-    if (this.isStarted) this.#drainQueue();
     this.#emitState();
+
+    if (this.isStarted && !this.isPaused) {
+      this.#drainQueue();
+    }
+
     return task.id;
   }
 
   start() {
     this.isStarted = true;
+    this.isPaused = false;
+    this.#emitState();
+    this.#drainQueue();
+  }
+
+  pause() {
+    this.isStarted = true;
+    this.isPaused = true;
+    this.#emitState();
+  }
+
+  resume() {
+    this.isStarted = true;
+    this.isPaused = false;
+    this.#emitState();
     this.#drainQueue();
   }
 
   cancelTask(taskId) {
-    const task = this.tasks.find((t) => t.id === taskId);
-    if (!task) return false;
-    if (["completed", "failed", "cancelled"].includes(task.status)) return false;
+    const task = this.#findTask(taskId);
+    if (!task || ["completed", "failed", "cancelled"].includes(task.status)) return false;
 
-    task.cancelRequested = true;
-    task.failReason = "cancelled-by-user";
+    if (task.retryTimer) {
+      clearTimeout(task.retryTimer);
+      task.retryTimer = null;
+    }
 
     if (task.status === "queued") {
-      task.status = "cancelled";
+      this.queue.remove((candidate) => candidate.id === task.id);
+      this.#markCancelled(task, "Cancelled before start");
       this.#emitState();
       return true;
     }
 
     if (task.status === "running") {
-      task.abortController?.abort("cancelled-by-user");
+      task.cancelRequested = true;
+      task.abortController?.abort();
       this.#emitState();
       return true;
     }
@@ -72,58 +94,31 @@ export class TaskOrchestrator {
     return false;
   }
 
-  #runWithTimeout(promise, timeoutMs, abortController) {
-    const taskPromise = Promise.resolve(promise);
-    taskPromise.catch(() => {});
-
-    const racers = [taskPromise];
-
-    if (timeoutMs > 0) {
-      racers.push(
-        new Promise((_, reject) => {
-          setTimeout(() => {
-            abortController?.abort("timeout");
-            reject(new TransientError("timeout", { code: "ETIMEDOUT" }));
-          }, timeoutMs);
-        })
-      );
-    }
-
-    if (abortController?.signal) {
-      racers.push(
-        new Promise((_, reject) => {
-          if (abortController.signal.aborted) {
-            reject(new Error("cancelled-by-user"));
-            return;
-          }
-
-          abortController.signal.addEventListener(
-            "abort",
-            () => reject(new Error("cancelled-by-user")),
-            { once: true }
-          );
-        })
-      );
-    }
-
-    return Promise.race(racers);
+  #findTask(taskId) {
+    return this.tasks.find((task) => task.id === taskId) ?? null;
   }
 
-  #isTransientError(error) {
-    return error instanceof TransientError || error?.transient === true;
-  }
-
-  #computeBackoffDelay(retriesSoFar) {
-    return this.baseDelayMs * Math.pow(2, retriesSoFar);
+  #markCancelled(task, reason = "Cancelled") {
+    task.status = "cancelled";
+    task.cancelRequested = true;
+    task.failReason = reason;
+    task.finishedAt = Date.now();
+    task.updatedAt = task.finishedAt;
+    task.nextRunAt = 0;
+    task.progress = 0;
   }
 
   #drainQueue() {
-    while (this.runningCount < this.maxConcurrency && !this.queue.isEmpty()) {
+    if (this.isPaused) return;
+
+    while (!this.isPaused && this.runningCount < this.maxConcurrency) {
       const task = this.queue.dequeue();
-      if (task.cancelRequested) {
-        task.status = "cancelled";
+      if (!task) break;
+
+      if (task.status !== "queued") {
         continue;
       }
+
       this.#runTask(task);
     }
 
@@ -133,49 +128,127 @@ export class TaskOrchestrator {
   async #runTask(task) {
     this.runningCount += 1;
     task.status = "running";
-    task.abortController = new AbortController();
+    task.startedAt ??= Date.now();
+    task.updatedAt = Date.now();
+    task.nextRunAt = 0;
+    task.cancelRequested = false;
+    task.progress = 10;
+
+    const controller = new AbortController();
+    task.abortController = controller;
     this.#emitState();
 
     try {
-      await this.#runWithTimeout(
-        task.run({ task, signal: task.abortController.signal, orchestrator: this }),
-        task.timeoutMs,
-        task.abortController
-      );
-
-      task.status = task.cancelRequested ? "cancelled" : "completed";
+      await this.#runWithTimeout(task, controller.signal);
+      task.progress = 100;
+      task.status = "completed";
+      task.finishedAt = Date.now();
+      task.updatedAt = task.finishedAt;
+      task.failReason = "";
     } catch (error) {
-      if (task.cancelRequested) {
-        task.status = "cancelled";
-      } else if (this.#isTransientError(error) && task.retries < this.maxRetries) {
-        const delay = this.#computeBackoffDelay(task.retries);
+      if (task.cancelRequested || controller.signal.aborted || error?.name === "AbortError") {
+        this.#markCancelled(task, "Cancelled");
+        return;
+      }
+
+      const isTransient = error instanceof TransientError || error?.transient === true;
+      const isPermanent = error instanceof PermanentError || error?.transient === false;
+
+      if (isTransient && task.retries < task.maxRetries) {
         task.retries += 1;
         task.status = "queued";
-        task.nextRunAt = Date.now() + delay;
-        this.runningCount = Math.max(0, this.runningCount - 1);
-        this.#emitState();
-        await this.sleep(delay);
-        if (!task.cancelRequested) this.queue.enqueue(task);
-        this.#drainQueue();
+        task.failReason = error?.message ?? "Transient error";
+        task.updatedAt = Date.now();
+        task.nextRunAt = Date.now() + this.#getRetryDelay(task.retries, task.retryDelayMs);
+        task.progress = 0;
+        this.#scheduleRetry(task);
         return;
-      } else {
-        task.status = "failed";
-        task.failReason = error?.message ?? "unknown";
+      }
+
+      task.status = "failed";
+      task.finishedAt = Date.now();
+      task.updatedAt = task.finishedAt;
+      task.failReason = error?.message ?? (isPermanent ? "Permanent error" : "Task failed");
+      task.progress = 0;
+    } finally {
+      task.abortController = null;
+      this.runningCount = Math.max(0, this.runningCount - 1);
+      this.#emitState();
+
+      if (this.isStarted && !this.isPaused) {
+        this.#drainQueue();
       }
     }
-
-    this.runningCount = Math.max(0, this.runningCount - 1);
-    this.#emitState();
-    this.#drainQueue();
   }
 
   getState() {
     return {
-      tasks: this.tasks,
-      runningCount: this.runningCount,
+      tasks: this.tasks.map((task) => this.#snapshotTask(task)),
       queueSize: this.queue.size(),
+      runningCount: this.runningCount,
+      started: this.isStarted,
+      isPaused: this.isPaused,
       maxConcurrency: this.maxConcurrency,
     };
+  }
+
+  #snapshotTask(task) {
+    const { run, retryTimer, abortController, ...snapshot } = task;
+    return { ...snapshot };
+  }
+
+  #getRetryDelay(retries, baseDelay) {
+    return baseDelay * 2 ** Math.max(0, retries - 1);
+  }
+
+  #scheduleRetry(task) {
+    if (task.retryTimer) {
+      clearTimeout(task.retryTimer);
+    }
+
+    const delay = Math.max(0, task.nextRunAt - Date.now());
+    task.retryTimer = setTimeout(() => {
+      task.retryTimer = null;
+
+      if (task.status === "cancelled") return;
+
+      this.queue.enqueue(task);
+      this.#emitState();
+
+      if (this.isStarted && !this.isPaused) {
+        this.#drainQueue();
+      }
+    }, delay);
+  }
+
+  async #runWithTimeout(task, signal) {
+    if (typeof task.run !== "function") {
+      throw new TypeError("Task is missing a run function");
+    }
+
+    const timeoutMs = task.timeoutMs ?? this.taskTimeoutMs;
+
+    const timeoutPromise = new Promise((_, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error(`Task timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timeoutId);
+          const abortError = new Error("Task cancelled");
+          abortError.name = "AbortError";
+          reject(abortError);
+        },
+        { once: true }
+      );
+    });
+
+    return Promise.race([
+      Promise.resolve().then(() => task.run({ signal, task, attempt: task.retries + 1 })),
+      timeoutPromise,
+    ]);
   }
 
   #emitState() {
