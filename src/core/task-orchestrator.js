@@ -14,6 +14,18 @@ export class TaskOrchestrator {
     this.isPaused = false;
   }
 
+  setMaxConcurrency(nextValue) {
+    const normalized = Math.min(5, Math.max(1, Number(nextValue) || 1));
+    this.maxConcurrency = normalized;
+    this.#emitState();
+
+    if (this.isStarted && !this.isPaused) {
+      this.#drainQueue();
+    }
+
+    return this.maxConcurrency;
+  }
+
   enqueue(taskInput) {
     const task = {
       id: taskInput.id,
@@ -189,6 +201,7 @@ export class TaskOrchestrator {
       started: this.isStarted,
       isPaused: this.isPaused,
       maxConcurrency: this.maxConcurrency,
+      maxSupportedConcurrency: 5,
     };
   }
 

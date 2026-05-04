@@ -8,17 +8,40 @@
 </head>
 <body>
   <header class="app-header">
-    <h1>Task Orchestrator Dashboard</h1>
-    <p>Simple dashboard shell</p>
+    <div class="title-block">
+      <h1>Task Orchestrator Dashboard</h1>
+    </div>
+    <div class="actions">
+      <label for="workerCountSelect">Workers</label>
+      <select id="workerCountSelect" aria-label="Worker count">
+        <option value="1">1</option>
+        <option value="2" selected>2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+        <option value="5">5</option>
+      </select>
+      <button id="seedTasksBtn" type="button">Add Tasks</button>
+      <button id="startBtn" type="button">Start</button>
+      <button id="pauseBtn" type="button">Pause</button>
+      <button id="resumeBtn" type="button">Resume</button>
+    </div>
   </header>
 
   <main class="grid">
     <section class="card">
       <h2>Overview</h2>
-      <p>Total Tasks: <span id="totalCount">0</span></p>
-      <p>Queued: <span id="queuedCount">0</span></p>
-      <p>Running: <span id="runningCount">0</span></p>
-      <p>Completed: <span id="completedCount">0</span></p>
+      <div class="stats">
+        <p>Total Tasks: <strong id="totalCount">0</strong></p>
+        <p>Queued: <strong id="queuedCount">0</strong></p>
+        <p>Running: <strong id="runningCount">0</strong></p>
+        <p>Completed: <strong id="completedCount">0</strong></p>
+        <p>Failed: <strong id="failedCount">0</strong></p>
+        <p>Cancelled: <strong id="cancelledCount">0</strong></p>
+        <p>Queue Depth: <strong id="queueDepth">0</strong></p>
+        <p>Success Rate: <strong id="successRate">0%</strong></p>
+        <p>State: <strong id="statusText">Idle</strong></p>
+        <p>Max Concurrency: <strong id="maxConcurrency">2</strong></p>
+      </div>
     </section>
 
     <section class="card">
@@ -34,6 +57,11 @@
     <section class="card full">
       <h2>Running</h2>
       <ul id="runningList"></ul>
+    </section>
+
+    <section class="card full">
+      <h2>Task History</h2>
+      <ul id="historyList" class="history-log"></ul>
     </section>
   </main>
   <script type="module" src="./src/main.js"></script>
