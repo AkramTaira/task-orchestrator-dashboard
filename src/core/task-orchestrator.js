@@ -11,6 +11,9 @@ export class TaskOrchestrator {
     taskTimeoutMs = 5000,
     retryDelayMs = 500,
     maxRetries = 3,
+    priorityAgingIntervalMs = 3000,
+    priorityAgingStep = 1,
+    priorityAgingMaxBoost = 12,
   }) {
     this.eventBus = eventBus;
     this.queue = queue;
@@ -21,6 +24,9 @@ export class TaskOrchestrator {
     this.taskTimeoutMs = taskTimeoutMs;
     this.retryDelayMs = retryDelayMs;
     this.maxRetries = maxRetries;
+    this.priorityAgingIntervalMs = priorityAgingIntervalMs;
+    this.priorityAgingStep = priorityAgingStep;
+    this.priorityAgingMaxBoost = priorityAgingMaxBoost;
     this.tasks = [];
     this.runningCount = 0;
     this.isStarted = false;
@@ -141,6 +147,8 @@ export class TaskOrchestrator {
   #drainQueue() {
     if (this.isPaused) return;
 
+    this.#applyPriorityAging();
+
     while (!this.isPaused && this.runningCount < this.maxConcurrency) {
       const task = this.queue.dequeue();
       if (!task) break;
@@ -187,8 +195,10 @@ export class TaskOrchestrator {
       if (isTransient && task.retries < task.maxRetries) {
         task.retries += 1;
         task.status = "queued";
+        task.priority = task.basePriority ?? task.priority;
         task.failReason = error?.message ?? "Transient error";
         task.updatedAt = Date.now();
+        task.enqueuedAt = Date.now();
         task.nextRunAt = Date.now() + this.#getRetryDelay(task.retries, task.retryDelayMs);
         task.progress = 0;
         this.#scheduleRetry(task);
@@ -289,6 +299,27 @@ export class TaskOrchestrator {
         this.#drainQueue();
       }
     }, delay);
+  }
+
+  #applyPriorityAging() {
+    if (this.queue.isEmpty() || this.priorityAgingIntervalMs <= 0) return;
+
+    const queuedItems = this.queue.values();
+    const now = Date.now();
+
+    for (const task of queuedItems) {
+      if (task.status !== "queued") continue;
+
+      const basePriority = task.basePriority ?? task.priority ?? 1;
+      const enqueuedAt = task.enqueuedAt ?? task.createdAt ?? now;
+      const waitedMs = Math.max(0, now - enqueuedAt);
+      const steps = Math.floor(waitedMs / this.priorityAgingIntervalMs);
+      const boost = Math.min(this.priorityAgingMaxBoost, steps * this.priorityAgingStep);
+
+      task.priority = basePriority + boost;
+    }
+
+    this.queue.rebuild(queuedItems);
   }
 
   async #hydrateFromPersistence() {

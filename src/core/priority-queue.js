@@ -9,11 +9,39 @@ export class PriorityQueue {
   }
 
   isEmpty() {
-    return this.heap.length === 0;
+    return this.size() === 0;
+  }
+
+  clear() {
+    this.heap = [];
   }
 
   peek() {
     return this.heap[0] ?? null;
+  }
+
+  values() {
+    return [...this.heap];
+  }
+
+  rebuild(values = []) {
+    this.heap = [...values];
+    if (this.heap.length <= 1) return;
+
+    for (let index = Math.floor(this.heap.length / 2) - 1; index >= 0; index -= 1) {
+      this.#heapifyDown(index);
+    }
+  }
+
+  remove(predicate) {
+    const nextValues = this.heap.filter((value, index) => !predicate(value, index));
+    const removed = nextValues.length !== this.heap.length;
+
+    if (removed) {
+      this.rebuild(nextValues);
+    }
+
+    return removed;
   }
 
   enqueue(value) {
