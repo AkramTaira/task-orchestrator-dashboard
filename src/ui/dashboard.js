@@ -61,8 +61,36 @@ export class Dashboard {
       });
 
     this.renderHistory("historyList", history);
+    this.renderAuditLog(state.auditLog || []);
 
     this.renderWorkers(state, byStatus.running);
+  }
+
+  renderAuditLog(entries) {
+    const el = document.getElementById("auditList");
+    if (!el) return;
+
+    const rows = entries.slice(-120).reverse();
+
+    el.innerHTML = rows
+      .map((entry) => {
+        const time = new Date(entry.at ?? Date.now()).toLocaleTimeString("en-US");
+        const meta = Object.entries(entry)
+          .filter(([key]) => key !== "at" && key !== "type")
+          .slice(0, 2)
+          .map(([key, value]) => `${key}:${String(value)}`)
+          .join(" | ");
+
+        return `
+          <li class="history-item">
+            <span class="history-time">${time}</span>
+            <span class="status-badge status-completed">${entry.type}</span>
+            <span class="history-name">${meta || "event"}</span>
+            <span class="history-meta">audit</span>
+          </li>
+        `;
+      })
+      .join("");
   }
 
   renderWorkers(state, runningTasks) {

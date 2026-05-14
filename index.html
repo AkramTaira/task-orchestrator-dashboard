@@ -10,8 +10,7 @@
   <div class="page-shell">
   <header class="app-header">
     <div class="title-block">
-      <h1>Task Orchestrator Console</h1>
-      <p>Clean task monitoring for learning, testing, and lightweight orchestration.</p>
+      <h1>Task Orchestrator Dashboard</h1>
     </div>
     <div class="actions">
       <label class="control-group">
@@ -24,7 +23,7 @@
           <option value="5">5</option>
         </select>
       </label>
-      <button id="seedTasksBtn" type="button">Add Demo Tasks</button>
+      <button id="seedTasksBtn" type="button">Add Tasks</button>
       <button id="startBtn" type="button">Start</button>
       <button id="pauseBtn" type="button">Pause</button>
       <button id="resumeBtn" type="button">Resume</button>
@@ -68,6 +67,11 @@
     <section class="card full">
       <h2>Task History</h2>
       <ul id="historyList" class="history-log"></ul>
+    </section>
+
+    <section class="card full">
+      <h2>Audit Log</h2>
+      <ul id="auditList" class="history-log"></ul>
     </section>
   </main>
   </div>
